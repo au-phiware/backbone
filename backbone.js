@@ -1504,6 +1504,7 @@
     var args = slice.call(arguments);
     var init = this._bindRoutes();
     var consume = function() {
+      router.bindNavigationListener();
       var init = router.initialize.apply(router, args);
       if (isPromise(init))
         return init.then(_.constant(router));
@@ -1521,12 +1522,21 @@
   var splatParam    = /\*\w+/g;
   var escapeRegExp  = /[\-{}\[\]+?.,\\\^$|#\s]/g;
 
+  // Route handlers registered through Router instances are stored here.
+  Router.handlers = [];
+
   // Set up all inheritable **Backbone.Router** properties and methods.
   _.extend(Router.prototype, Events, {
 
     // Initialize is an empty function by default. Override it with your own
     // initialization logic.
     initialize: function(){},
+
+    // Listen to when a modular History interface, like Backbone.history,
+    // updates the URL.
+    bindNavigationListener: function() {
+      this.listenTo(Backbone.history, 'navigate', this._onNavigate);
+    },
 
     // Manually bind a single named route to a callback. For example:
     //
@@ -1541,22 +1551,12 @@
         name = '';
       }
       if (!callback) callback = this[name];
-      var router = this;
-      Backbone.history.route(route, function(fragment) {
-        var args = router._extractParameters(route, fragment);
-        var result = router.execute(callback, args, name);
-        var consume = function(result) {
-          if (result !== false) {
-            router.trigger.apply(router, ['route:' + name].concat(args));
-            router.trigger('route', name, args);
-            Backbone.history.trigger('route', router, name, args);
-          }
-        };
-        if (isPromise(result))
-          result.then(consume);
-        else
-          consume(result);
-      });
+      var handler = {
+        route: route,
+        callback: callback,
+        name: name
+      };
+      Router.handlers.push(handler);
       return this;
     },
 
@@ -1585,6 +1585,36 @@
     navigate: function(fragment, options) {
       Backbone.history.navigate(fragment, options);
       return this;
+    },
+
+    // Determine if a registered handler matches the fragment when
+    // History emits a navigate event.
+    _onNavigate: function(fragment) {
+      var router = this;
+      var matchedRoute = this.matchFragment(fragment);
+      if (!matchedRoute) return this;
+      var args = this._extractParameters(matchedRoute.route, fragment);
+      var result = this.execute(matchedRoute.callback, args, matchedRoute.name);
+      var consume = function(result) {
+        if (result !== false) {
+          router.trigger.apply(router, ['route:' + matchedRoute.name].concat(args));
+          router.trigger('route', matchedRoute.name, args);
+          Backbone.history.trigger('route', router, name, args);
+        }
+      };
+      if (isPromise(result))
+        result.then(consume);
+      else
+        consume(result);
+    },
+
+    // Match a fragment with a registered handler
+    matchFragment: function(fragment) {
+      // If the root doesn't match, no routes can match either.
+      if (!Backbone.history.matchRoot()) return false;
+      return _.find(Router.handlers, function(handler) {
+        return handler.route.test(fragment);
+      });
     },
 
     // Bind all defined routes to `Backbone.history`. We have to reverse the
@@ -1642,8 +1672,7 @@
   // and URL fragments. If the browser supports neither (old IE, natch),
   // falls back to polling.
   var History = Backbone.History = function() {
-    this.handlers = [];
-    this.checkUrl = _.bind(this.checkUrl, this);
+    _.bindAll(this, 'checkUrl');
 
     // Ensure that `History` can be used outside of the browser.
     if (typeof window !== 'undefined') {
@@ -1797,7 +1826,9 @@
         this._checkUrlInterval = setInterval(this.checkUrl, this.interval);
       }
 
-      if (!this.options.silent) return this.loadUrl();
+      if (!this.options.silent) {
+        return this.trigger('navigate', this.getFragment());
+      }
     },
 
     // Disable Backbone.history, perhaps temporarily. Not useful in a real app,
@@ -1826,14 +1857,8 @@
       History.started = false;
     },
 
-    // Add a route to be tested when the fragment changes. Routes added later
-    // may override previous routes.
-    route: function(route, callback, meta) {
-      this.handlers.unshift(_.defaults({route: route, callback: callback}, meta));
-    },
-
     // Checks the current URL to see if it has changed, and if it has,
-    // calls `loadUrl`, normalizing across the hidden iframe.
+    // triggers `navigate`, normalizing across the hidden iframe.
     checkUrl: function(e) {
       var current = this.getFragment();
 
@@ -1845,22 +1870,8 @@
 
       if (current === this.fragment) return false;
       if (this.iframe) this.navigate(current);
-      this.loadUrl();
-    },
-
-    // Attempt to load the current URL fragment. If a route succeeds with a
-    // match, returns `true`. If no defined routes matches the fragment,
-    // returns `false`.
-    loadUrl: function(fragment) {
-      // If the root doesn't match, no routes can match either.
-      if (!this.matchRoot()) return false;
-      fragment = this.fragment = this.getFragment(fragment);
-      return _.some(this.handlers, function(handler) {
-        if (handler.route.test(fragment)) {
-          handler.callback(fragment);
-          return true;
-        }
-      });
+      this.fragment = this.getFragment();
+      this.trigger('navigate', this.fragment);
     },
 
     // Save a fragment into the hash history, or replace the URL state if the
@@ -1872,7 +1883,8 @@
     // you wish to modify the current URL without adding an entry to the history.
     navigate: function(fragment, options) {
       if (!History.started) return false;
-      if (!options || options === true) options = {trigger: !!options};
+      if (options === void 0) options = {silent: true};
+      if (options === false) options = {silent: false};
 
       // Normalize the fragment.
       fragment = this.getFragment(fragment || '');
@@ -1917,7 +1929,9 @@
       } else {
         return this.location.assign(url);
       }
-      if (options.trigger) return this.loadUrl(fragment);
+      if (!options.silent) {
+        this.trigger('navigate', fragment);
+      }
     },
 
     // Update the hash location, either replacing the current entry, or adding

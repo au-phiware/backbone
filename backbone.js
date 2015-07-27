@@ -1556,7 +1556,7 @@
         callback: callback,
         name: name
       };
-      Router.handlers.push(handler);
+      Router.handlers.unshift(handler);
       return this;
     },
 

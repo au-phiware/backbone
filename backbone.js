@@ -585,19 +585,17 @@
     // Fetch the model from the server, merging the response with the model's
     // local attributes. Any changed attributes will trigger a "change" event.
     fetch: function(options) {
-      options = _.extend({parse: true}, options);
+      var opts = _.extend({parse: true}, _.omit(options, 'success', 'error'));
       var model = this;
       var success = options.success || _.identity;
       var error = options.error;
-      delete options.success;
-      delete options.error;
-      return wrapError(this.sync('read', this, options), this, options, error)
+      return wrapError(this.sync('read', this, opts), this, opts, error)
         .then(function(resp) {
-          var serverAttrs = options.parse ? model.parse(resp, options) : resp;
-          if (model.set(serverAttrs, options))
-            return Promise.resolve(success.call(options.context, model, resp, options))
+          var serverAttrs = opts.parse ? model.parse(resp, opts) : resp;
+          if (model.set(serverAttrs, opts))
+            return Promise.resolve(success.call(opts.context, model, resp, opts))
               .then(function(delivered) {
-                model.trigger('sync', model, resp, options);
+                model.trigger('sync', model, resp, opts);
                 return delivered;
               });
           return model;
@@ -708,12 +706,9 @@
         urlError();
       if (this.isNew()) return base;
       var id = this.get(this.idAttribute);
-      var consume = function(base) {
+      return Promise.resolve(base).then(function(base) {
         return base.replace(/[^\/]$/, '$&/') + encodeURIComponent(id);
-      };
-      if (isPromise(base))
-        return base.then(consume);
-      return consume(base);
+      });
     },
 
     // **parse** converts a response into the hash of attributes to be `set` on
@@ -1416,15 +1411,12 @@
     };
 
     // Make the request, allowing the user to override any Ajax options.
-    var consume = function(url) {
+    return Promise.resolve(params.url).then(function(url) {
       params.url = url || urlError();
       var promise = Promise.resolve(options.xhr = Backbone.ajax(_.extend(params, _.omit(options, 'url'))));
       model.trigger('request', model, promise, options);
       return promise;
-    };
-    if (isPromise(params.url))
-      return params.url.then(consume);
-    return consume(params.url);
+    });
   };
 
   // Map from CRUD to HTTP for our default `Backbone.sync` implementation.
@@ -1485,17 +1477,13 @@
       Backbone.history.route(route, function(fragment) {
         var args = router._extractParameters(route, fragment);
         var result = router.execute(callback, args, name);
-        var consume = function(result) {
+        Promise.resolve(result).then(function(result) {
           if (result !== false) {
             router.trigger.apply(router, ['route:' + name].concat(args));
             router.trigger('route', name, args);
             Backbone.history.trigger('route', router, name, args);
           }
-        };
-        if (isPromise(result))
-          result.then(consume);
-        else
-          consume(result);
+        });
       });
       return this;
     },
@@ -1509,10 +1497,7 @@
       };
       if (callback) {
         try {
-          var route = callback.apply(this, args);
-          if (isPromise(route)) {
-            route['catch'](error);
-          }
+          Promise.resolve(callback.apply(this, args))['catch'](error);
         } catch(e) {
           error(e);
         }
@@ -1930,11 +1915,6 @@
         throw resp;
       });
   };
-
-  // Allow any `then`able (and `catch`able) to be considered a `Promise`
-  var isPromise = function(o) {
-    return o && (typeof o === 'object' || typeof o === 'function') && typeof o.then === 'function' && typeof o['catch'] === 'function';
-  }
 
   return Backbone;
 

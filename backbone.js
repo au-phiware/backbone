@@ -14,24 +14,24 @@
 
   // Set up Backbone appropriately for the environment. Start with AMD.
   if (typeof define === 'function' && define.amd) {
-    define(['underscore', 'jquery', 'promise', 'exports'], function(_, $, Promise, exports) {
+    define(['underscore', 'jquery', 'exports'], function(_, $, exports) {
       // Export global even in AMD case in case this script is loaded with
       // others that may still expect a global Backbone.
-      root.Backbone = factory(root, exports, _, $, Promise || root.Promise);
+      root.Backbone = factory(root, exports, _, $);
     });
 
   // Next for Node.js or CommonJS. jQuery may not be needed as a module.
   } else if (typeof exports !== 'undefined') {
-    var _ = require('underscore'), $, Promise = require('promise');
+    var _ = require('underscore'), $;
     try { $ = require('jquery'); } catch(e) {}
-    factory(root, exports, _, $, Promise || root.Promise);
+    factory(root, exports, _, $);
 
   // Finally, as a browser global.
   } else {
-    root.Backbone = factory(root, {}, root._, (root.jQuery || root.Zepto || root.ender || root.$), root.Promise);
+    root.Backbone = factory(root, {}, root._, (root.jQuery || root.Zepto || root.ender || root.$));
   }
 
-}(function(root, Backbone, _, $, Promise) {
+}(function(root, Backbone, _, $) {
 
   // Initial Setup
   // -------------
@@ -49,9 +49,6 @@
   // For Backbone's purposes, jQuery, Zepto, Ender, or My Library (kidding) owns
   // the `$` variable.
   Backbone.$ = $;
-
-  // As for `$` we do for `Promise`
-  Backbone.Promise = Promise;
 
   // Runs Backbone.js in *noConflict* mode, returning the `Backbone` variable
   // to its previous owner. Returns a reference to this Backbone object.
@@ -401,20 +398,10 @@
     this.attributes = {};
     if (options.collection) this.collection = options.collection;
     if (options.parse) attrs = this.parse(attrs, options) || {};
-    var model = this, args = slice.call(arguments);
-    var defaults = _.result(this, 'defaults');
-    var consume = function(defaults) {
-      attrs = _.defaults({}, attrs, defaults);
-      model.set(attrs, options);
-      model.changed = {};
-      var init = model.initialize.apply(model, args);
-      if (isPromise(init))
-        return init.then(_.constant(model));
-      return model;
-    };
-    if (isPromise(defaults))
-      return defaults.then(consume);
-    return consume(defaults);
+    attrs = _.defaults({}, attrs, _.result(this, 'defaults'));
+    this.set(attrs, options);
+    this.changed = {};
+    this.initialize.apply(this, arguments);
   };
 
   // Attach all inheritable methods to the Model prototype.
@@ -641,7 +628,7 @@
       // `set(attr).save(null, opts)` with validation. Otherwise, check if
       // the model will be valid when the attributes, if any, are set.
       if (attrs && !wait) {
-        if (!this.set(attrs, options)) return Promise.reject(this);
+        if (!this.set(attrs, options)) return Promise.reject(this.validationError);
       } else {
         if (!this._validate(attrs, options)) return Promise.reject(this.validationError);
       }
@@ -785,19 +772,12 @@
   // If a `comparator` is specified, the Collection will maintain
   // its models in sort order, as they're added and removed.
   var Collection = Backbone.Collection = function(models, options) {
-    var collection = this;
     options || (options = {});
     if (options.model) this.model = options.model;
     if (options.comparator !== void 0) this.comparator = options.comparator;
     this._reset();
-    var init = this.initialize.apply(this, arguments);
-    var consume = function() {
-      if (models) collection.reset(models, _.extend({silent: true}, options));
-      return collection;
-    };
-    if (isPromise(init))
-      return init.then(consume);
-    consume();
+    this.initialize.apply(this, arguments);
+    if (models) this.reset(models, _.extend({silent: true}, options));
   };
 
   // Default options for `Collection#set`.
@@ -1017,16 +997,19 @@
     // normal circumstances, as the set will maintain sort order as each item
     // is added.
     sort: function(options) {
-      if (!this.comparator) throw new Error('Cannot sort a set without a comparator');
+      var comparator = this.comparator;
+      if (!comparator) throw new Error('Cannot sort a set without a comparator');
       options || (options = {});
 
-      // Run sort based on type of `comparator`.
-      if (_.isString(this.comparator) || this.comparator.length === 1) {
-        this.models = this.sortBy(this.comparator, this);
-      } else {
-        this.models.sort(_.bind(this.comparator, this));
-      }
+      var length = comparator.length;
+      if (_.isFunction(comparator)) comparator = _.bind(comparator, this);
 
+      // Run sort based on type of `comparator`.
+      if (length === 1 || _.isString(comparator)) {
+        this.models = this.sortBy(comparator);
+      } else {
+        this.models.sort(comparator);
+      }
       if (!options.silent) this.trigger('sort', this, options);
       return this;
     },
@@ -1194,8 +1177,8 @@
   // right here:
   var collectionMethods = { forEach: 3, each: 3, map: 3, collect: 3, reduce: 4,
       foldl: 4, inject: 4, reduceRight: 4, foldr: 4, find: 3, detect: 3, filter: 3,
-      select: 3, reject: 3, every: 3, all: 3, some: 3, any: 3, include: 2,
-      contains: 2, invoke: 0, max: 3, min: 3, toArray: 1, size: 1, first: 3,
+      select: 3, reject: 3, every: 3, all: 3, some: 3, any: 3, include: 3, includes: 3,
+      contains: 3, invoke: 0, max: 3, min: 3, toArray: 1, size: 1, first: 3,
       head: 3, take: 3, initial: 3, rest: 3, tail: 3, drop: 3, last: 3,
       without: 0, difference: 0, indexOf: 3, shuffle: 1, lastIndexOf: 3,
       isEmpty: 1, chain: 1, sample: 3, partition: 3, groupBy: 3, countBy: 3,
@@ -1220,17 +1203,8 @@
   var View = Backbone.View = function(options) {
     this.cid = _.uniqueId('view');
     _.extend(this, _.pick(options, viewOptions));
-    var view = this, args = slice.call(arguments);
-    var init = this._ensureElement();
-    var consume = function() {
-      var init = view.initialize.apply(view, args);
-      if (isPromise(init))
-        return init.then(_.constant(view));
-      return view;
-    };
-    if (isPromise(init))
-      return init.then(consume);
-    return consume();
+    this._ensureElement();
+    this.initialize.apply(this, arguments);
   };
 
   // Cached regex to split keys for `delegate`.
@@ -1282,7 +1256,8 @@
     setElement: function(element) {
       this.undelegateEvents();
       this._setElement(element);
-      return this.delegateEvents();
+      this.delegateEvents();
+      return this;
     },
 
     // Creates the `this.el` and `this.$el` references for this view using the
@@ -1311,21 +1286,15 @@
     delegateEvents: function(events) {
       events || (events = _.result(this, 'events'));
       if (!events) return this;
-      var view = this;
-      var consume = function(events) {
-        view.undelegateEvents();
-        for (var key in events) {
-          var method = events[key];
-          if (!_.isFunction(method)) method = view[method];
-          if (!method) continue;
-          var match = key.match(delegateEventSplitter);
-          view.delegate(match[1], match[2], _.bind(method, view));
-        }
-        return view;
-      };
-      if (isPromise(events))
-        return events.then(consume);
-      return consume(events);
+      this.undelegateEvents();
+      for (var key in events) {
+        var method = events[key];
+        if (!_.isFunction(method)) method = this[method];
+        if (!method) continue;
+        var match = key.match(delegateEventSplitter);
+        this.delegate(match[1], match[2], _.bind(method, this));
+      }
+      return this;
     },
 
     // Add a single event listener to the view's element (or a child element
@@ -1362,31 +1331,15 @@
     // matching element, and re-assign it to `el`. Otherwise, create
     // an element from the `id`, `className` and `tagName` properties.
     _ensureElement: function() {
-      var view = this;
-      var result, consume;
       if (!this.el) {
-        result = _.result(this, 'attributes');
-        consume = function(result) {
-          var attrs = _.extend({}, result);
-          if (view.id) attrs.id = _.result(view, 'id');
-          if (view.className) attrs['class'] = _.result(view, 'className');
-          var result = view.setElement(view._createElement(_.result(view, 'tagName')));
-          var consume = function() {
-            view._setAttributes(attrs);
-          };
-          if (isPromise(result))
-            return result.then(consume);
-          consume();
-        };
+        var attrs = _.extend({}, _.result(this, 'attributes'));
+        if (this.id) attrs.id = _.result(this, 'id');
+        if (this.className) attrs['class'] = _.result(this, 'className');
+        this.setElement(this._createElement(_.result(this, 'tagName')));
+        this._setAttributes(attrs);
       } else {
-        result = _.result(this, 'el');
-        consume = function(result) {
-          return view.setElement(result);
-        };
+        this.setElement(_.result(this, 'el'));
       }
-      if (isPromise(result))
-        return result.then(consume);
-      return consume(result);
     },
 
     // Set attributes from a hash on this view's element.  Exposed for
@@ -1571,8 +1524,9 @@
         try {
           var route = callback.apply(this, args);
           if (isPromise(route)) {
-            route['catch'](error);
+            return route['catch'](error);
           }
+          return route;
         } catch(e) {
           error(e);
         }
@@ -1622,19 +1576,11 @@
     // routes can be defined at the bottom of the route map.
     _bindRoutes: function() {
       if (!this.routes) return;
-      var router = this;
-      var routes = _.result(this, 'routes');
-      var consume = function(routes) {
-        router.routes = routes;
-        routes = _.keys(routes);
-        var route;
-        while ((route = routes.pop()) != null) {
-          router.route(route, router.routes[route]);
-        }
-      };
-      if (isPromise(routes))
-        return routes.then(consume);
-      consume(routes);
+      this.routes = _.result(this, 'routes');
+      var route, routes = _.keys(this.routes);
+      while ((route = routes.pop()) != null) {
+        this.route(route, this.routes[route]);
+      }
     },
 
     // Convert a route string into a regular expression, suitable for matching

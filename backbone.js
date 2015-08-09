@@ -1542,7 +1542,7 @@
         if (result !== false) {
           router.trigger.apply(router, ['route:' + matchedRoute.name].concat(args));
           router.trigger('route', matchedRoute.name, args);
-          Backbone.history.trigger('route', router, name, args);
+          Backbone.history.trigger('route', router, matchedRoute.name, args);
         }
       });
     },

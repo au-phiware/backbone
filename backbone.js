@@ -595,7 +595,7 @@
         .then(function(resp) {
           var serverAttrs = options.parse ? model.parse(resp, options) : resp;
           if (model.set(serverAttrs, options))
-            return Promise.resolve(success.call(options.context, model, resp, options))
+            return resolve(success.call(options.context, model, resp, options))
               .then(function(delivered) {
                 model.trigger('sync', model, resp, options);
                 return delivered;
@@ -654,7 +654,7 @@
         var serverAttrs = options.parse ? model.parse(resp, options) : resp;
         if (wait) serverAttrs = _.extend({}, attrs, serverAttrs);
         if (!serverAttrs || model.set(serverAttrs, options))
-          return Promise.resolve(success.call(options.context, model, resp, options))
+          return resolve(success.call(options.context, model, resp, options))
             .then(function(delivered) {
               model.trigger('sync', model, resp, options);
               return delivered;
@@ -688,7 +688,7 @@
         var promise = Promise.resolve(model);
         if (wait) destroy();
         if (success)
-          promise = Promise.resolve(success.call(options.context, model, resp, options));
+          promise = resolve(success.call(options.context, model, resp, options));
         if (!isNew)
           promise = promise.then(function(delivered) {
             model.trigger('sync', model, resp, options);
@@ -708,12 +708,9 @@
         urlError();
       if (this.isNew()) return base;
       var id = this.get(this.idAttribute);
-      var consume = function(base) {
+      return resolve(base).then(function(base) {
         return base.replace(/[^\/]$/, '$&/') + encodeURIComponent(id);
-      };
-      if (isPromise(base))
-        return base.then(consume);
-      return consume(base);
+      });
     },
 
     // **parse** converts a response into the hash of attributes to be `set` on
@@ -1033,7 +1030,7 @@
         .then(function(resp) {
           var method = options.reset ? 'reset' : 'set';
           collection[method](resp, options);
-          return Promise.resolve(success.call(options.context, collection, resp, options))
+          return resolve(success.call(options.context, collection, resp, options))
             .then(function(delivered) {
               collection.trigger('sync', collection, resp, options);
               return delivered;
@@ -1061,7 +1058,7 @@
       return model.save(null, options)
         .then(function(resp) {
           if (wait) collection.add(model, options);
-          return Promise.resolve(success.call(options.context, model, resp, options));
+          return resolve(success.call(options.context, model, resp, options));
         });
     },
 
@@ -1419,15 +1416,12 @@
     };
 
     // Make the request, allowing the user to override any Ajax options.
-    var consume = function(url) {
+    return resolve(params.url).then(function(url) {
       params.url = url || urlError();
       var promise = Promise.resolve(options.xhr = Backbone.ajax(_.extend(params, _.omit(options, 'url'))));
       model.trigger('request', model, promise, options);
       return promise;
-    };
-    if (isPromise(params.url))
-      return params.url.then(consume);
-    return consume(params.url);
+    });
   };
 
   // Map from CRUD to HTTP for our default `Backbone.sync` implementation.
@@ -1456,16 +1450,11 @@
     var router = this;
     var args = slice.call(arguments);
     var init = this._bindRoutes();
-    var consume = function() {
+    return resolve(init).then(function() {
       router.bindNavigationListener();
       var init = router.initialize.apply(router, args);
-      if (isPromise(init))
-        return init.then(_.constant(router));
-      return router;
-    };
-    if (isPromise(init))
-      return init.then(consume);
-    return consume();
+      return resolve(init).then(_.constant(router));
+    });
   };
 
   // Cached regular expressions for matching named param parts and splatted
@@ -1549,17 +1538,13 @@
       if (!matchedRoute) return this;
       var args = this._extractParameters(matchedRoute.route, fragment);
       var result = this.execute(matchedRoute.callback, args, matchedRoute.name);
-      var consume = function(result) {
+      return resolve(result).then(function(result) {
         if (result !== false) {
           router.trigger.apply(router, ['route:' + matchedRoute.name].concat(args));
           router.trigger('route', matchedRoute.name, args);
           Backbone.history.trigger('route', router, name, args);
         }
-      };
-      if (isPromise(result))
-        result.then(consume);
-      else
-        consume(result);
+      });
     },
 
     // Match a fragment with a registered handler
@@ -1962,6 +1947,17 @@
   // Allow any `then`able (and `catch`able) to be considered a `Promise`
   var isPromise = function(o) {
     return o && (typeof o === 'object' || typeof o === 'function') && typeof o.then === 'function' && typeof o['catch'] === 'function';
+  }
+
+  // Like Promise#resolve but returns a fake `then`able so that execution is immediate.
+  var resolve = function(promise) {
+    if (isPromise(promise))
+      return promise;
+    return {
+      then: function(fn) {
+        return fn(promise);
+      }
+    };
   }
 
   return Backbone;

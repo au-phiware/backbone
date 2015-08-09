@@ -509,7 +509,8 @@
     obj
       .once('event', f)
       .on('event', f)
-      .trigger('event')
+      .trigger('event');
+    obj
       .trigger('event');
   });
 
@@ -607,12 +608,10 @@
     var obj = _.extend({}, Backbone.Events);
     var obj2 = _.extend({}, Backbone.Events);
     var fn = function() {};
-    equal(obj, obj.trigger('noeventssetyet'));
     equal(obj, obj.off('noeventssetyet'));
     equal(obj, obj.stopListening('noeventssetyet'));
     equal(obj, obj.on('a', fn));
     equal(obj, obj.once('c', fn));
-    equal(obj, obj.trigger('a'));
     equal(obj, obj.listenTo(obj2, 'a', fn));
     equal(obj, obj.listenToOnce(obj2, 'b', fn));
     equal(obj, obj.off('a c'));

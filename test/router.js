@@ -239,7 +239,7 @@
   });
 
   test("loadUrl is not called for identical routes.", 0, function() {
-    Backbone.history.loadUrl = function(){ ok(false); };
+    Backbone.history.on('navigate', function(){ ok(false); });
     location.replace('http://example.com#route');
     Backbone.history.navigate('route');
     Backbone.history.navigate('/route');
@@ -489,7 +489,7 @@
     Backbone.history.stop();
     location.replace('http://example.com/root');
     Backbone.history = _.extend(new Backbone.History, {location: location});
-    Backbone.history.loadUrl = function() { ok(true); };
+    Backbone.history.on('navigate', function(){ ok(true); });
     Backbone.history.start({
       pushState: true,
       root: '/root'

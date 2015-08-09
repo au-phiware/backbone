@@ -339,24 +339,47 @@
   Events.trigger =  function(name) {
     if (!this._events) return this;
 
+    var i = 0, names, result;
     var length = Math.max(0, arguments.length - 1);
     var args = Array(length);
-    for (var i = 0; i < length; i++) args[i] = arguments[i + 1];
+    for (var j = 0; j < length; j++) args[j] = arguments[j + 1];
 
-    eventsApi(triggerApi, this._events, name, void 0, args);
-    return this;
+    if (name && typeof name === 'object') {
+      // trigger shouldn't be passed an object
+      names = _.keys(name);
+    } else if (name && eventSplitter.test(name)) {
+      // Handle space separated event names.
+      names = name.split(eventSplitter);
+    }
+    if (names) {
+      // Handle names by delegating them individually.
+      for (var l = names.length; i < l; i++) {
+        events = triggerApi(this._events, names[i], args);
+      }
+    } else {
+      // Finally, standard events.
+      result = triggerApi(this._events, name, args);
+    }
+    return result;
   };
 
   // Handles triggering the appropriate event callbacks.
-  var triggerApi = function(objEvents, name, cb, args) {
+  var triggerApi = function(objEvents, name, args) {
     if (objEvents) {
       var events = objEvents[name];
       var allEvents = objEvents.all;
+      var result;
       if (events && allEvents) allEvents = allEvents.slice();
-      if (events) triggerEvents(events, args);
-      if (allEvents) triggerEvents(allEvents, [name].concat(args));
+      if (events) result = triggerEvents(events, args);
+      if (allEvents) result = resolve(result).then(function(previous) {
+        if (previous === false) return false;
+        return resolve(triggerEvents(allEvents, [name].concat(args))).then(function(result) {
+          if (result === false) return false;
+          return result || previous;
+        });
+      });
     }
-    return objEvents;
+    return result;
   };
 
   // A difficult-to-believe, but optimized internal dispatch function for
@@ -365,12 +388,36 @@
   var triggerEvents = function(events, args) {
     var ev, i = -1, l = events.length, a1 = args[0], a2 = args[1], a3 = args[2];
     switch (args.length) {
-      case 0: while (++i < l) (ev = events[i]).callback.call(ev.ctx); return;
-      case 1: while (++i < l) (ev = events[i]).callback.call(ev.ctx, a1); return;
-      case 2: while (++i < l) (ev = events[i]).callback.call(ev.ctx, a1, a2); return;
-      case 3: while (++i < l) (ev = events[i]).callback.call(ev.ctx, a1, a2, a3); return;
-      default: while (++i < l) (ev = events[i]).callback.apply(ev.ctx, args); return;
+      case 0: return chainEvents(events, events.length, 0, function(ev) {
+        return ev.callback.call(ev.ctx);
+      });
+      case 1: return chainEvents(events, events.length, 0, function(ev) {
+        return ev.callback.call(ev.ctx, a1);
+      });
+      case 2: return chainEvents(events, events.length, 0, function(ev) {
+        return ev.callback.call(ev.ctx, a1, a2);
+      });
+      case 3: return chainEvents(events, events.length, 0, function(ev) {
+        return ev.callback.call(ev.ctx, a1, a2, a3);
+      });
+      default: return chainEvents(events, events.length, 0, function(ev) {
+        return ev.callback.apply(ev.ctx, args);
+      });
     }
+  };
+
+  // Chain events together.
+  // If a callback returns false, then short the chain,
+  // otherwise return the last defined value.
+  var chainEvents = function(events, length, i, call) {
+    if (i >= length) return;
+    var result = call(events[i]);
+    return resolve(result).then(function(previous) {
+      if (previous === false) return previous;
+      return resolve(chainEvents(events, length, ++i, call)).then(function(result) {
+        return typeof result === 'undefined' ? previous : result;
+      });
+    });
   };
 
   // Aliases for backwards compatibility.
@@ -677,7 +724,7 @@
 
       var destroy = function() {
         model.stopListening();
-        model.trigger('destroy', model, model.collection, options);
+        return model.trigger('destroy', model, model.collection, options);
       };
 
       var isNew = model.isNew();
@@ -1164,7 +1211,7 @@
           if (id != null) this._byId[id] = model;
         }
       }
-      this.trigger.apply(this, arguments);
+      return this.trigger.apply(this, arguments);
     }
 
   });
@@ -1494,6 +1541,7 @@
       }
       if (!callback) callback = this[name];
       var handler = {
+        router: this,
         route: route,
         callback: callback,
         name: name
@@ -1535,7 +1583,7 @@
     _onNavigate: function(fragment) {
       var router = this;
       var matchedRoute = this.matchFragment(fragment);
-      if (!matchedRoute) return this;
+      if (!matchedRoute) return;
       var args = this._extractParameters(matchedRoute.route, fragment);
       var result = this.execute(matchedRoute.callback, args, matchedRoute.name);
       return resolve(result).then(function(result) {
@@ -1544,16 +1592,18 @@
           router.trigger('route', matchedRoute.name, args);
           Backbone.history.trigger('route', router, matchedRoute.name, args);
         }
+        return matchedRoute;
       });
     },
 
     // Match a fragment with a registered handler
     matchFragment: function(fragment) {
       // If the root doesn't match, no routes can match either.
-      if (!Backbone.history.matchRoot()) return false;
-      return _.find(Router.handlers, function(handler) {
+      if (!Backbone.history.matchRoot(this.root)) return false;
+      var found = _.find(Router.handlers, function(handler) {
         return handler.route.test(fragment);
       });
+      if (found.router === this) return found;
     },
 
     // Bind all defined routes to `Backbone.history`. We have to reverse the
@@ -1638,10 +1688,10 @@
     },
 
     // Does the pathname match the root?
-    matchRoot: function() {
+    matchRoot: function(root) {
       var path = this.decodeFragment(this.location.pathname);
-      var root = path.slice(0, this.root.length - 1) + '/';
-      return root === this.root;
+      root = root || this.root;
+      return root === path.slice(0, root.length - 1) + '/';
     },
 
     // Unicode characters in `location.pathname` are percent encoded so they're
@@ -1802,7 +1852,7 @@
       if (current === this.fragment) return false;
       if (this.iframe) this.navigate(current);
       this.fragment = this.getFragment();
-      this.trigger('navigate', this.fragment);
+      return this.trigger('navigate', this.fragment);
     },
 
     // Save a fragment into the hash history, or replace the URL state if the
@@ -1860,8 +1910,9 @@
         return this.location.assign(url);
       }
       if (options.trigger) {
-        this.trigger('navigate', fragment);
+        return this.trigger('navigate', fragment);
       }
+      return false;
     },
 
     // Update the hash location, either replacing the current entry, or adding

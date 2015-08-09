@@ -1814,8 +1814,7 @@
     // you wish to modify the current URL without adding an entry to the history.
     navigate: function(fragment, options) {
       if (!History.started) return false;
-      if (options === void 0) options = {silent: true};
-      if (options === false) options = {silent: false};
+      if (!options || options === true) options = {trigger: !!options};
 
       // Normalize the fragment.
       fragment = this.getFragment(fragment || '');
@@ -1860,7 +1859,7 @@
       } else {
         return this.location.assign(url);
       }
-      if (!options.silent) {
+      if (options.trigger) {
         this.trigger('navigate', fragment);
       }
     },

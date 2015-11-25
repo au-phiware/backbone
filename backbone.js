@@ -947,20 +947,26 @@
           if (!model) return model;
           id = coll.modelId(model.attributes || attrs); // ...it's good enough for get!
           if (order) {
-            if (isPromise(model)) {
-              foundPromise = true;
-              model = model.then(function(model) {
-                if (model.isNew() || !modelMap[coll.modelId(model.attributes)]) {
-                  order.push(model);
-                  orderChanged = true;
-                }
-              });
-            } else {
-              if (model.isNew() || !modelMap[id]) {
-                order.push(model);
+            if (!modelMap[id]) {
+              order.push(model);
+              if (isPromise(model)) {
+                foundPromise = true;
+              }
 
-                // Check to see if this is actually a new model at this index.
-                orderChanged = orderChanged || !coll.models[i] || model.cid !== coll.models[i].cid;
+              // Check to see if this is actually a new model at this index.
+              orderChanged = orderChanged || !coll.models[i] || model.cid !== coll.models[i].cid;
+            } else {
+              if (isPromise(model)) {
+                foundPromise = true;
+                model = model.then(function(model) {
+                  if (model.isNew() || !modelMap[coll.modelId(model.attributes)]) {
+                    order.push(model);
+                    orderChanged = true;
+                  }
+                });
+              } else if (model.isNew()) {
+                order.push(model);
+                orderChanged = true;
               }
             }
           }
@@ -973,6 +979,8 @@
       if (foundPromise) {
         models = Promise.all(models);
         toAdd = Promise.all(toAdd);
+        if (order)
+          order = Promise.all(order);
       }
 
       return resolve(models).then(function(models) {
@@ -985,39 +993,41 @@
         }
 
         return resolve(toAdd).then(function(toAdd) {
-          // See if sorting is needed, update `length` and splice in new models.
-          if (toAdd.length || orderChanged) {
-            if (sortable) sort = true;
-            coll.length += toAdd.length;
-            if (at != null) {
+          return resolve(order).then(function(order) {
+            // See if sorting is needed, update `length` and splice in new models.
+            if (toAdd.length || orderChanged) {
+              if (sortable) sort = true;
+              coll.length += toAdd.length;
+              if (at != null) {
+                for (var i = 0; i < toAdd.length; i++) {
+                  coll.models.splice(at + i, 0, toAdd[i]);
+                }
+              } else {
+                if (order) coll.models.length = 0;
+                var orderedModels = order || toAdd;
+                for (var i = 0; i < orderedModels.length; i++) {
+                  coll.models.push(orderedModels[i]);
+                }
+              }
+            }
+
+            // Silently sort the collection if appropriate.
+            if (sort) coll.sort({silent: true});
+
+            // Unless silenced, it's time to fire all appropriate add/sort events.
+            if (!options.silent) {
+              var addOpts = at != null ? _.clone(options) : options;
               for (var i = 0; i < toAdd.length; i++) {
-                coll.models.splice(at + i, 0, toAdd[i]);
+                if (at != null) addOpts.index = at + i;
+                (model = toAdd[i]).trigger('add', model, coll, addOpts);
               }
-            } else {
-              if (order) coll.models.length = 0;
-              var orderedModels = order || toAdd;
-              for (var i = 0; i < orderedModels.length; i++) {
-                coll.models.push(orderedModels[i]);
-              }
+              if (sort || orderChanged) coll.trigger('sort', coll, options);
+              if (toAdd.length || toRemove.length) coll.trigger('update', coll, options);
             }
-          }
 
-          // Silently sort the collection if appropriate.
-          if (sort) coll.sort({silent: true});
-
-          // Unless silenced, it's time to fire all appropriate add/sort events.
-          if (!options.silent) {
-            var addOpts = at != null ? _.clone(options) : options;
-            for (var i = 0; i < toAdd.length; i++) {
-              if (at != null) addOpts.index = at + i;
-              (model = toAdd[i]).trigger('add', model, coll, addOpts);
-            }
-            if (sort || orderChanged) coll.trigger('sort', coll, options);
-            if (toAdd.length || toRemove.length) coll.trigger('update', coll, options);
-          }
-
-          // Return the added (or merged) model (or models).
-          return singular ? models[0] : models;
+            // Return the added (or merged) model (or models).
+            return singular ? models[0] : models;
+          });
         });
       });
     },

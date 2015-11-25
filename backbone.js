@@ -1129,12 +1129,13 @@
       return wrapError(this.sync('read', this, options), this, options, error)
         .then(function(resp) {
           var method = options.reset ? 'reset' : 'set';
-          collection[method](resp, options);
-          return resolve(success.call(options.context, collection, resp, options))
-            .then(function(delivered) {
-              collection.trigger('sync', collection, resp, options);
-              return delivered;
-            });
+          return resolve(collection[method](resp, options)).then(function(models) {
+            return resolve(success.call(options.context, collection, resp, options))
+              .then(function(delivered) {
+                collection.trigger('sync', collection, resp, options);
+                return delivered;
+              });
+          });
         });
     },
 

@@ -903,87 +903,123 @@
       var add = options.add, merge = options.merge, remove = options.remove;
       var order = !sortable && add && remove ? [] : false;
       var orderChanged = false;
+      var coll = this;
+      var foundPromise = false;
 
       // Turn bare objects into model references, and prevent invalid models
       // from being added.
       for (var i = 0; i < models.length; i++) {
-        attrs = models[i];
+        if (isPromise(models[i])) {
+          foundPromise = true;
+        }
+        models[i] = resolve(models[i]).then(function(attrs) {
+          var model = attrs;
+          // If a duplicate is found, prevent it from being added and
+          // optionally merge it into the existing model.
+          if (existing = coll.get(attrs)) {
+            if (remove) modelMap[existing.cid] = true;
+            if (merge && attrs !== existing) {
+              attrs = coll._isModel(attrs) ? attrs.attributes : attrs;
+              if (options.parse) attrs = existing.parse(attrs, options);
+              existing.set(attrs, options);
+              if (sortable && !sort && existing.hasChanged(sortAttr)) sort = true;
+            }
+            model = existing;
 
-        // If a duplicate is found, prevent it from being added and
-        // optionally merge it into the existing model.
-        if (existing = this.get(attrs)) {
-          if (remove) modelMap[existing.cid] = true;
-          if (merge && attrs !== existing) {
-            attrs = this._isModel(attrs) ? attrs.attributes : attrs;
-            if (options.parse) attrs = existing.parse(attrs, options);
-            existing.set(attrs, options);
-            if (sortable && !sort && existing.hasChanged(sortAttr)) sort = true;
+          // If this is a new, valid model, push it to the `toAdd` list.
+          } else if (add) {
+            model = coll._prepareModel(attrs, options);
+            if (isPromise(model)) {
+              foundPromise = true;
+              toAdd.push(model.then(putInArray(models, i))
+                .then(function(model) {
+                  coll._addReference(model, options);
+                  return model;
+                })
+              );
+            } else if (model) {
+              toAdd.push(model);
+              coll._addReference(model, options);
+            }
           }
-          models[i] = existing;
 
-        // If this is a new, valid model, push it to the `toAdd` list.
-        } else if (add) {
-          model = models[i] = this._prepareModel(attrs, options);
-          if (!model) continue;
-          toAdd.push(model);
-          this._addReference(model, options);
-        }
+          // Do not add multiple models with the same `id`.
+          if (!model) return model;
+          id = coll.modelId(model.attributes || attrs); // ...it's good enough for get!
+          if (order) {
+            if (isPromise(model)) {
+              foundPromise = true;
+              model = model.then(function(model) {
+                if (model.isNew() || !modelMap[coll.modelId(model.attributes)]) {
+                  order.push(model);
+                  orderChanged = true;
+                }
+              });
+            } else {
+              if (model.isNew() || !modelMap[id]) {
+                order.push(model);
 
-        // Do not add multiple models with the same `id`.
-        model = existing || model;
-        if (!model) continue;
-        id = this.modelId(model.attributes);
-        if (order && (model.isNew() || !modelMap[id])) {
-          order.push(model);
-
-          // Check to see if this is actually a new model at this index.
-          orderChanged = orderChanged || !this.models[i] || model.cid !== this.models[i].cid;
-        }
-
-        modelMap[id] = true;
-      }
-
-      // Remove stale models.
-      if (remove) {
-        for (var i = 0; i < this.length; i++) {
-          if (!modelMap[(model = this.models[i]).cid]) toRemove.push(model);
-        }
-        if (toRemove.length) this._removeModels(toRemove, options);
-      }
-
-      // See if sorting is needed, update `length` and splice in new models.
-      if (toAdd.length || orderChanged) {
-        if (sortable) sort = true;
-        this.length += toAdd.length;
-        if (at != null) {
-          for (var i = 0; i < toAdd.length; i++) {
-            this.models.splice(at + i, 0, toAdd[i]);
+                // Check to see if this is actually a new model at this index.
+                orderChanged = orderChanged || !coll.models[i] || model.cid !== coll.models[i].cid;
+              }
+            }
           }
-        } else {
-          if (order) this.models.length = 0;
-          var orderedModels = order || toAdd;
-          for (var i = 0; i < orderedModels.length; i++) {
-            this.models.push(orderedModels[i]);
+
+          modelMap[id] = true;
+          return model;
+        });
+      }
+
+      if (foundPromise) {
+        models = Promise.all(models);
+        toAdd = Promise.all(toAdd);
+      }
+
+      return resolve(models).then(function(models) {
+        // Remove stale models.
+        if (remove) {
+          for (var i = 0; i < coll.length; i++) {
+            if (!modelMap[(model = coll.models[i]).cid]) toRemove.push(model);
           }
+          if (toRemove.length) coll._removeModels(toRemove, options);
         }
-      }
 
-      // Silently sort the collection if appropriate.
-      if (sort) this.sort({silent: true});
+        return resolve(toAdd).then(function(toAdd) {
+          // See if sorting is needed, update `length` and splice in new models.
+          if (toAdd.length || orderChanged) {
+            if (sortable) sort = true;
+            coll.length += toAdd.length;
+            if (at != null) {
+              for (var i = 0; i < toAdd.length; i++) {
+                coll.models.splice(at + i, 0, toAdd[i]);
+              }
+            } else {
+              if (order) coll.models.length = 0;
+              var orderedModels = order || toAdd;
+              for (var i = 0; i < orderedModels.length; i++) {
+                coll.models.push(orderedModels[i]);
+              }
+            }
+          }
 
-      // Unless silenced, it's time to fire all appropriate add/sort events.
-      if (!options.silent) {
-        var addOpts = at != null ? _.clone(options) : options;
-        for (var i = 0; i < toAdd.length; i++) {
-          if (at != null) addOpts.index = at + i;
-          (model = toAdd[i]).trigger('add', model, this, addOpts);
-        }
-        if (sort || orderChanged) this.trigger('sort', this, options);
-        if (toAdd.length || toRemove.length) this.trigger('update', this, options);
-      }
+          // Silently sort the collection if appropriate.
+          if (sort) coll.sort({silent: true});
 
-      // Return the added (or merged) model (or models).
-      return singular ? models[0] : models;
+          // Unless silenced, it's time to fire all appropriate add/sort events.
+          if (!options.silent) {
+            var addOpts = at != null ? _.clone(options) : options;
+            for (var i = 0; i < toAdd.length; i++) {
+              if (at != null) addOpts.index = at + i;
+              (model = toAdd[i]).trigger('add', model, coll, addOpts);
+            }
+            if (sort || orderChanged) coll.trigger('sort', coll, options);
+            if (toAdd.length || toRemove.length) coll.trigger('update', coll, options);
+          }
+
+          // Return the added (or merged) model (or models).
+          return singular ? models[0] : models;
+        });
+      });
     },
 
     // When you have more items than you want to add or remove individually,
@@ -1119,11 +1155,13 @@
         options = opts;
         return resp;
       };
-      return model.save(null, options)
-        .then(function(resp) {
-          if (wait) collection.add(model, options);
-          return resolve(success.call(options.context, model, resp, options));
-        });
+      return resolve(model).then(function(model) {
+        return model.save(null, options)
+          .then(function(resp) {
+            if (wait) collection.add(model, options);
+            return resolve(success.call(options.context, model, resp, options));
+          });
+      });
     },
 
     // **parse** converts a response into a list of models to be added to the
@@ -1163,6 +1201,12 @@
       options = options ? _.clone(options) : {};
       options.collection = this;
       var model = new this.model(attrs, options);
+      if (isPromise(model))
+        return model.then(function(model) {
+          if (!model.validationError) return model;
+          this.trigger('invalid', this, model.validationError, options);
+          throw model.validationError;
+        });
       if (!model.validationError) return model;
       this.trigger('invalid', this, model.validationError, options);
       return false;
@@ -2063,7 +2107,14 @@
         return fn(promise);
       }
     };
-  }
+  };
+
+  var putInArray = function(array, index) {
+    return function(value) {
+      array[index] = value;
+      return value;
+    };
+  };
 
   return Backbone;
 

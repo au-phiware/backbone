@@ -1705,7 +1705,7 @@
       var found = _.find(Router.handlers, function(handler) {
         return handler.route.test(fragment);
       });
-      if (found.router === this) return found;
+      if (found && found.router === this) return found;
     },
 
     // Bind all defined routes to `Backbone.history`. We have to reverse the

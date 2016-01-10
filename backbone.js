@@ -976,14 +976,7 @@
         });
       }
 
-      if (foundPromise) {
-        models = Promise.all(models);
-        toAdd = Promise.all(toAdd);
-        if (order)
-          order = Promise.all(order);
-      }
-
-      return resolve(models).then(function(models) {
+      return resolve(foundPromise ? Promise.all(models) : models).then(function(models) {
         // Remove stale models.
         if (remove) {
           for (var i = 0; i < coll.length; i++) {
@@ -992,8 +985,8 @@
           if (toRemove.length) coll._removeModels(toRemove, options);
         }
 
-        return resolve(toAdd).then(function(toAdd) {
-          return resolve(order).then(function(order) {
+        return resolve(foundPromise ? Promise.all(toAdd) : toAdd).then(function(toAdd) {
+          return resolve(order && foundPromise ? Promise.all(order) : order).then(function(order) {
             // See if sorting is needed, update `length` and splice in new models.
             if (toAdd.length || orderChanged) {
               if (sortable) sort = true;

@@ -706,10 +706,9 @@
       this.attributes = attributes;
 
       return promise.then(function(resp) {
-        // Ensure attributes are restored during synchronous saves.
-        model.attributes = attributes;
         var serverAttrs = options.parse ? model.parse(resp, options) : resp;
         if (wait) serverAttrs = _.extend({}, attrs, serverAttrs);
+        _.extend(serverAttrs, model.attributes);
         if (!serverAttrs || model.set(serverAttrs, options))
           return resolve(success.call(options.context, model, resp, options))
             .then(function(delivered) {
